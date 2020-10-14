@@ -1,44 +1,50 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <assert.h>
 #include <ctype.h>
-#include <string.h>
+#include <getopt.h>
 #include <math.h>
 #include <signal.h>
-#include <time.h>
+#include <stdarg.h>
 #include <stddef.h>
-#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
 
-#include <X11/Xos.h>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <X11/Xresource.h>
-#include <X11/Xproto.h>
 #include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#include <X11/Xos.h>
+#include <X11/Xproto.h>
+#include <X11/Xresource.h>
+#include <X11/Xutil.h>
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
 
 
 static Window selectWindow(Display*, int*, int*);
 static Window findSubWindow(Display*, Window, Window, int*, int*);
+
 static int getWindowColor(Display*, XColor*);
 static int MXError(Display*, XErrorEvent*);
-static void die(char*);
+
+static void err(const char*, ...);
+static void die(const char*);
+
 
 int
-main(int argc, char* *argv)
+main(int argc, char** argv)
 {
     Display* dpy;
     int status;
     XColor color;
     Colormap cmap;
     int r, g, b;
-    int html = 1;
+
+    int html  = 1;
     int pound = 0;
 
     int opt;
-    while ((opt = getopt(argc, argv, "vhd")) != -1) {
+    while ((opt = getopt(argc, argv, "vhd#n")) != -1) {
         switch (opt) {
             case 'h': html = 1;  break;
             case 'd': html = 0;  break;
@@ -46,10 +52,10 @@ main(int argc, char* *argv)
             case 'n': pound = 0; break;
             case 'v':
             {
-                printf("grabc v1.0: [-vhd]\n");
+                printf("grabc v1.0: [-vhd#npc]\n");
                 exit(0);
             }
-            default: fprintf(stderr, "invalid flag: %c\n", opt); break;
+            default: err("invalid flag: %c\n", opt); break;
         }
     }
 
@@ -87,20 +93,21 @@ static Window
 selectWindow(Display* dpy, int* x, int* y)
 {
     Cursor target_cursor;
-    static Cursor cross_cursor = None;
+    static Cursor cursor = None;
     int status;
     Window target_win, root_win;
     XEvent event;
     target_win = None;
 
-    if (!cross_cursor) {
-        cross_cursor = XCreateFontCursor(dpy, XC_tcross);
+    cursor = XCreateFontCursor(dpy, XC_draft_small);
+    if (!cursor) {
+        cursor = XCreateFontCursor(dpy, XC_tcross);
 
-        if (!cross_cursor)
+        if (!cursor)
             return None;
     }
 
-    target_cursor = cross_cursor;
+    target_cursor = cursor;
     root_win = XRootWindow(dpy, XDefaultScreen(dpy));
     status = XGrabPointer(dpy, root_win, 0,
         (unsigned)ButtonPressMask, GrabModeSync,
@@ -115,7 +122,7 @@ selectWindow(Display* dpy, int* x, int* y)
                 event.xbutton.subwindow, &event.xbutton.x, &event.xbutton.y);
 
             if (!target_win) {
-                fprintf(stderr, "failed getting target win, targeting root\n");
+                err("failed getting target win, targeting root\n");
                 target_win = root_win;
             }
             XUngrabPointer(dpy, CurrentTime);
@@ -123,7 +130,7 @@ selectWindow(Display* dpy, int* x, int* y)
     } else
         die("failed grabbing mouse\n");
 
-    XFreeCursor(dpy, cross_cursor);
+    XFreeCursor(dpy, cursor);
 
     *x = event.xbutton.x;
     *y = event.xbutton.y;
@@ -145,13 +152,12 @@ findSubWindow(Display* dpy, Window top_win, Window win_to_check, int* x, int* y)
 
     win = win_to_check;
 
-    while ((XTranslateCoordinates(dpy, top_win, win_to_check, *x, *y, &newx, &newy, &win) != 0) && !win)
-        if (win) {
+    while ((XTranslateCoordinates(dpy, top_win, win_to_check, *x, *y, &newx, &newy, &win) != 0) && win) {
             top_win = win_to_check;
             win_to_check = win;
             *x = newx;
             *y = newy;
-        }
+    }
 
     if (!win)
         win = win_to_check;
@@ -166,7 +172,7 @@ static int
 getWindowColor(Display* dpy, XColor* color)
 {
     Window target_win;
-    XImage *ximage;
+    XImage* ximage;
     int x, y;
 
     target_win = selectWindow(dpy,&x,&y);
@@ -222,7 +228,18 @@ MXError(Display* dpy, XErrorEvent* error)
 }
 
 static void
-die(char* msg)
+err(const char* fmt, ...)
+{
+#ifdef DEBUG
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+#endif
+}
+
+static void
+die(const char* msg)
 {
     fprintf(stderr, "%s", msg);
     exit(1);
