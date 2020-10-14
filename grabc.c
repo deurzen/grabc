@@ -1,30 +1,3 @@
-/*  A program to pick a color by clicking the mouse.
- *
- *  RCS:
- *      $Revision$
- *      $Date$
- *
- *  Description:
- *
- *  When this program is run, the mouse pointer is grabbed and changed to
- *  a cross hair and when the mouse is clicked, the color of the clicked
- *  pixel is written to stdout in hex prefixed with #
- *
- *  This program can be useful when you see a color and want to use the
- *  color in xterm or your window manager's border but no clue what the 
- *  name of the color is. It's silly to use a image processing software
- *  to find it out.
- *
- * Example: 
- *   cpick
- *          #ffffff
- *   xterm -bg `cpick` -fg `cpick` (silly but esoteric!) 
- *
- *  Development History:
- *      who                  when               why
- *      ma_muquit@fccc.edu   march-16-19997     first cut
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -34,6 +7,8 @@
 #include <math.h>
 #include <signal.h>
 #include <time.h>
+#include <stddef.h>
+#include <getopt.h>
 
 #include <X11/Xos.h>
 #include <X11/Xlib.h>
@@ -44,284 +19,211 @@
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
 
-#ifndef True
-#define True    1
-#endif
 
-#ifndef False
-#define False   0
-#endif
+static Window selectWindow(Display*, int*, int*);
+static Window findSubWindow(Display*, Window, Window, int*, int*);
+static int getWindowColor(Display*, XColor*);
+static int MXError(Display*, XErrorEvent*);
+static void die(char*);
 
-/* private function prototypes */
-static Window selectWindow (Display *,int *x,int *y);
-
-static Window findSubWindow(Display *display,Window top_winodw,
-    Window window_to_check,int *x,int *y);
-
-static int getWindowColor(Display *display,XColor *color);
-static int MXError(Display *display,XErrorEvent *error);
-
-int main(int argc,char **argv)
+int
+main(int argc, char* *argv)
 {
-    Display
-        *display;
+    Display* dpy;
+    int status;
+    XColor color;
+    Colormap cmap;
+    int r, g, b;
+    int html = 1;
+    int pound = 0;
 
-    int
-        status;
-
-    XColor  
-        color;
-
-    Colormap
-        cmap;
-
-    int
-        i,
-        r,
-        g,
-        b;
-
-    for (i=1; i < argc; i++)
-    {
-        if (strncmp(argv[i],"-h",2) == 0)
-        {
-            (void) fprintf (stderr,"grabc 1.1 by Muhammad A Muquit\n");
-            exit(1);
+    int opt;
+    while ((opt = getopt(argc, argv, "vhd")) != -1) {
+        switch (opt) {
+            case 'h': html = 1;  break;
+            case 'd': html = 0;  break;
+            case '#': pound = 1; break;
+            case 'n': pound = 0; break;
+            case 'v':
+            {
+                printf("grabc v1.0: [-vhd]\n");
+                exit(0);
+            }
+            default: fprintf(stderr, "invalid flag: %c\n", opt); break;
         }
     }
-    display=XOpenDisplay((char *) NULL);
-    cmap=DefaultColormap(display,DefaultScreen(display));
+
+    dpy = XOpenDisplay(NULL);
+    cmap = DefaultColormap(dpy, DefaultScreen(dpy));
 
     XSetErrorHandler(MXError);
 
-    if (display == (Display *) NULL)
-    {
-        (void) fprintf (stderr,"Failed to open local DISPLAY!'n");
-        exit(1);
-    }
+    if (!dpy)
+        die("failed to open dpy\n");
 
-    status=getWindowColor(display,&color);
-    if (status == True)
-    {
-        XQueryColor(display,cmap,&color);
-        r=(color.red >> 8);
-        g=(color.green >> 8);
-        b=(color.blue >> 8);
-        (void) fprintf (stdout,"#%02x%02x%02x\n",r,g,b);
-        (void) fflush(stdout);
-        /*
-        ** write the values in decimal on stderr
-        */
-        (void) fprintf(stderr,"%d,%d,%d\n",r,g,b);
-    }
-    else
-    {
-        (void) fprintf (stderr,"Failed to grab color!\n");
-    }
-    return (0);
+    status = getWindowColor(dpy, &color);
+    if (status == 1) {
+        XQueryColor(dpy, cmap, &color);
+        r = color.red   >> 8;
+        g = color.green >> 8;
+        b = color.blue  >> 8;
+
+        if (html) {
+            if (pound)
+                printf("#%02x%02x%02x", r, g, b);
+            else
+                printf("%02x%02x%02x", r, g, b);
+        } else
+            printf("%d,%d,%d", r, g, b);
+
+        fflush(stdout);
+    } else
+        die("failed grabbing color\n");
+
+    return 0;
 }
 
-/*
-** function to select a window
-** output parameters: x,y (coordinate of the point of click)
-** reutrns Window
-** exits if mouse can not be grabbed
-*/
-static Window selectWindow(Display *display,int *x,int *y)
+static Window
+selectWindow(Display* dpy, int* x, int* y)
 {
-    Cursor
-        target_cursor;
+    Cursor target_cursor;
+    static Cursor cross_cursor = None;
+    int status;
+    Window target_win, root_win;
+    XEvent event;
+    target_win = None;
 
-    static Cursor
-        cross_cursor=(Cursor) NULL;
-    int
-        status;
+    if (!cross_cursor) {
+        cross_cursor = XCreateFontCursor(dpy, XC_tcross);
 
-    Window
-        target_window,
-        root_window;
-
-    XEvent
-        event;
-
-    target_window=(Window) NULL;
-
-    if (cross_cursor == (Cursor) NULL)
-    {
-        cross_cursor=XCreateFontCursor(display,XC_tcross);
-        if (cross_cursor == (Cursor) NULL)
-        {
-            (void) fprintf (stderr,"Failed to create Cross Cursor!\n");
-            return ((Window) NULL);
-        }
+        if (!cross_cursor)
+            return None;
     }
-    target_cursor=cross_cursor;
-    root_window=XRootWindow(display,XDefaultScreen(display));
 
-    status=XGrabPointer(display,root_window,False,
-        (unsigned int) ButtonPressMask,GrabModeSync,
-        GrabModeAsync,root_window,target_cursor,CurrentTime);
+    target_cursor = cross_cursor;
+    root_win = XRootWindow(dpy, XDefaultScreen(dpy));
+    status = XGrabPointer(dpy, root_win, 0,
+        (unsigned)ButtonPressMask, GrabModeSync,
+        GrabModeAsync, root_win, target_cursor, CurrentTime);
 
-    if (status == GrabSuccess)
-    {
-        XAllowEvents(display,SyncPointer,CurrentTime);
-        XWindowEvent(display,root_window,ButtonPressMask,&event);
+    if (status == GrabSuccess) {
+        XAllowEvents(dpy, SyncPointer, CurrentTime);
+        XWindowEvent(dpy, root_win, ButtonPressMask,&event);
 
-        if (event.type == ButtonPress)
-        {
-            target_window=findSubWindow(display,root_window,
-                event.xbutton.subwindow,
-                &event.xbutton.x,
-                &event.xbutton.y );
+        if (event.type == ButtonPress) {
+            target_win = findSubWindow(dpy, root_win,
+                event.xbutton.subwindow, &event.xbutton.x, &event.xbutton.y);
 
-            if (target_window == (Window) NULL)
-            {
-                (void) fprintf (stderr,
-                    "Failed to get target window, getting root window!\n");
-                target_window=root_window;
+            if (!target_win) {
+                fprintf(stderr, "failed getting target win, targeting root\n");
+                target_win = root_win;
             }
-            XUngrabPointer(display,CurrentTime);
+            XUngrabPointer(dpy, CurrentTime);
         }
-    }
-    else
-    {
-        (void) fprintf (stderr,"Failed to grab mouse!\n");
-        exit(1);
-    }
+    } else
+        die("failed grabbing mouse\n");
 
-    /* free things we do not need, always a good practice */
-    XFreeCursor(display,cross_cursor);
+    XFreeCursor(dpy, cross_cursor);
 
-    (*x)=event.xbutton.x;
-    (*y)=event.xbutton.y;
+    *x = event.xbutton.x;
+    *y = event.xbutton.y;
 
-    return (target_window);
+    return target_win;
 }
 
-/* find a window */
-static Window findSubWindow(Display *display,Window top_window,
-    Window window_to_check,int *x,int *y)
+static Window
+findSubWindow(Display* dpy, Window top_win, Window win_to_check, int* x, int* y)
 {
-    int 
-        newx,
-        newy;
+    int newx, newy;
+    Window win;
 
-    Window
-        window;
+    if (!top_win)
+        return None;
 
-    if (top_window == (Window) NULL)
-        return ((Window) NULL);
+    if (!win_to_check)
+        return None;
 
-    if (window_to_check == (Window) NULL)
-        return ((Window) NULL);
+    win = win_to_check;
 
-    /* initialize automatics */
-    window=window_to_check;
-
-    while ((XTranslateCoordinates(display,top_window,window_to_check,
-        *x,*y,&newx,&newy,&window) != 0) &&
-           (window != (Window) NULL))
-    {
-        if (window != (Window) NULL)
-        {
-            top_window=window_to_check;
-            window_to_check=window;
-            (*x)=newx;
-            (*y)=newy;
+    while ((XTranslateCoordinates(dpy, top_win, win_to_check, *x, *y, &newx, &newy, &win) != 0) && !win)
+        if (win) {
+            top_win = win_to_check;
+            win_to_check = win;
+            *x = newx;
+            *y = newy;
         }
-    }
 
-    if (window == (Window) NULL)
-        window=window_to_check;
+    if (!win)
+        win = win_to_check;
 
+    *x = newx;
+    *y = newy;
 
-    (*x)=newx;
-    (*y)=newy;
-
-    return (window);
+    return win;
 }
 
-/*
- * get the color of the pixel of the point of mouse click
- * output paramter: XColor *color
- *
- * returns True if succeeds
- *          False if fails
- */
-
-static int getWindowColor(Display *display,XColor *color)
+static int
+getWindowColor(Display* dpy, XColor* color)
 {
-    Window
-        root_window,
-        target_window;
+    Window target_win;
+    XImage *ximage;
+    int x, y;
 
-    XImage
-        *ximage;
+    target_win = selectWindow(dpy,&x,&y);
 
-    int
-        x,
-        y;
+    if (!target_win)
+        return 0;
 
-    Status
-        status;
+    ximage = XGetImage(dpy, target_win, x, y, 1, 1, AllPlanes, ZPixmap);
+    if (!ximage)
+        return 0;
 
-    root_window=XRootWindow(display,XDefaultScreen(display));
-    target_window=selectWindow(display,&x,&y);
-    
-    if (target_window == (Window) NULL)
-        return (False);
-
-    ximage=XGetImage(display,target_window,x,y,1,1,AllPlanes,ZPixmap);
-    if (ximage == (XImage *) NULL)
-        return (False);
-
-    color->pixel=XGetPixel(ximage,0,0);
+    color->pixel = XGetPixel(ximage, 0, 0);
     XDestroyImage(ximage);
 
-    return (True);
+    return 1;
 }
 
-/* forgiving X error handler */
-
-static int MXError (Display *display, XErrorEvent *error)
+static int
+MXError(Display* dpy, XErrorEvent* error)
 {
-    int
-        xerrcode;
- 
+    int xerrcode;
     xerrcode = error->error_code;
- 
-    if (xerrcode == BadAlloc || 
-        (xerrcode == BadAccess && error->request_code==88)) 
-    {
-        return (False);
-    }
-    else
-    {
-        switch (error->request_code)
+
+    if (xerrcode == BadAlloc || (xerrcode == BadAccess && error->request_code == 88))
+        return 0;
+
+    switch (error->request_code) {
+    case X_GetGeometry:
         {
-            case X_GetGeometry:
-            {
-                if (error->error_code == BadDrawable)
-                    return (False);
-                break;
-            }
+            if (error->error_code == BadDrawable)
+                return 0;
 
-            case X_GetWindowAttributes:
-            case X_QueryTree:
-            {
-                if (error->error_code == BadWindow)
-                    return (False);
-                break;
-            }
+            break;
+        }
+    case X_GetWindowAttributes:
+    case X_QueryTree:
+        {
+            if (error->error_code == BadWindow)
+                return 0;
 
-            case X_QueryColors:
-            {
-                if (error->error_code == BadValue)
-                    return(False);
-                break;
-            }
+            break;
+        }
+    case X_QueryColors:
+        {
+            if (error->error_code == BadValue)
+                return 0;
+
+            break;
         }
     }
-    return (True);
+
+    return 0;
 }
 
+static void
+die(char* msg)
+{
+    fprintf(stderr, "%s", msg);
+    exit(1);
+}
